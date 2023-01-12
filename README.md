@@ -1,7 +1,7 @@
 # JsonBinary
 Convert JSON to and from a binary format.
 
-A C++ and a TypeScript version of the same serializer/deserializer can be found in this repository.
+A C++ and a TypeScript version of the same JSON serializer/deserializer can be found in this repository.
 
 Performance has not yet been measured against each languages' JSON parser/stringifier.
 
