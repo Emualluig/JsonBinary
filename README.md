@@ -1,5 +1,5 @@
 # JsonBinary
-Convert to and from json as a binary file. 
+Convert JSON to and from a binary format.
 
 A C++ and a TypeScript version of the same serializer/deserializer can be found in this repository.
 
