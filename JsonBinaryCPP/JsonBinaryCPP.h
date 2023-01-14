@@ -1,5 +1,5 @@
 #ifndef _JSONBINARY_CPP_H_
-#define __JSONBINARY_CPP_H_
+#define _JSONBINARY_CPP_H_
 
 #include <nlohmann/json.hpp>
 #include <string>
@@ -16,6 +16,21 @@ namespace JsonBinary {
 	namespace Internal {
 		template<typename T> concept isTriviallyCopyable = std::is_trivially_copyable<T>::value;
 		template <auto A, typename...> auto DelayEvaluation = A;
+
+		template<typename T> concept isVector = 
+			std::same_as<T, std::vector<typename T::value_type, typename T::allocator_type>>;
+
+		template<typename T> concept isSet =
+			std::same_as<T, std::set<typename T::key_type, typename T::key_compare, typename T::allocator_type>> ||
+			std::same_as<T, std::unordered_set<typename T::key_type, typename T::hasher, typename T::key_equal, typename T::allocator_type>>;
+
+		template<typename T> concept isMap =
+			std::same_as<T, std::map<typename T::key_type, typename T::mapped_type, typename T::key_compare, typename T::allocator_type>> ||
+			std::same_as<T, std::unordered_map<typename T::key_type, typename T::mapped_type, typename T::hasher, typename T::key_equal, typename T::allocator_type>>;
+		
+		template<typename T> concept isOptional =
+			std::same_as<T, std::optional<typename T::value_type>>;
+
 		enum class BinType : uint8_t {
 			OBJECT_8 = 1,
 			OBJECT_64,
@@ -63,7 +78,6 @@ namespace JsonBinary {
 			index += N;
 			return *ptr;
 		}
-		
 	};
 
 	namespace Deserialization {
@@ -180,15 +194,229 @@ namespace JsonBinary {
 			}
 		};
 		template<typename T> static T deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) = delete;
+		template<> static std::string deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::STRING_8) {
+				const auto size = Internal::readBytesAs<uint8_t>(bytes, index);
+				std::string retval = "";
+				for (std::size_t i = 0; i < size; i++) {
+					retval += Internal::readBytesAs<uint8_t>(bytes, index);
+				}
+				return retval;
+			}
+			else if (type == Internal::BinType::STRING_64) {
+				const auto size = Internal::readBytesAs<uint64_t>(bytes, index);
+				std::string retval = "";
+				for (std::size_t i = 0; i < size; i++) {
+					retval += Internal::readBytesAs<uint8_t>(bytes, index);
+				}
+				return retval;
+			}
+			else {
+				throw std::exception("Expected string type byte.");
+			}
+		}
+		template<typename T> requires Internal::isVector<T> && Deserializable<typename T::value_type> 
+		static T deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			using E = typename T::value_type;
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::ARRAY_8) {
+				const auto size = Internal::readBytesAs<uint8_t>(bytes, index);
+				T retval = {};
+				for (std::size_t i = 0; i < size; i++) {
+					retval.push_back(deserialize_impl<E>(bytes, index));
+				}
+				return retval;
+			}
+			else if (type == Internal::BinType::ARRAY_64) {
+				const auto size = Internal::readBytesAs<uint64_t>(bytes, index);
+				T retval = {};
+				for (std::size_t i = 0; i < size; i++) {
+					retval.push_back(deserialize_impl<E>(bytes, index));
+				}
+				return retval;
+			}
+			else {
+				throw std::exception("Expected vector type byte.");
+			}
+		}
+		template<typename T> requires Internal::isSet<T> && Deserializable<typename T::value_type> 
+		static T deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			using E = typename T::value_type;
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::ARRAY_8) {
+				const auto size = Internal::readBytesAs<uint8_t>(bytes, index);
+				T retval = {};
+				for (std::size_t i = 0; i < size; i++) {
+					retval.insert(deserialize_impl<E>(bytes, index));
+				}
+				return retval;
+			}
+			else if (type == Internal::BinType::ARRAY_64) {
+				const auto size = Internal::readBytesAs<uint64_t>(bytes, index);
+				T retval = {};
+				for (std::size_t i = 0; i < size; i++) {
+					retval.insert(deserialize_impl<E>(bytes, index));
+				}
+				return retval;
+			}
+			else {
+				throw std::exception("Expected vector (set) type byte.");
+			}
+		}
+		template<typename T> requires Internal::isMap<T> && std::same_as<typename T::key_type, std::string> && Deserializable<typename T::mapped_type> 
+		static T deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			using Value = typename T::mapped_type;
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::OBJECT_8) {
+				const auto size = Internal::readBytesAs<uint8_t>(bytes, index);
+				T retval = {};
+				for (std::size_t i = 0; i < size; i++) {
+					retval.insert({ 
+						deserialize_impl<std::string>(bytes, index), 
+						deserialize_impl<Value>(bytes, index) 
+					});
+				}
+				return retval;
+			}
+			else if (type == Internal::BinType::OBJECT_64) {
+				const auto size = Internal::readBytesAs<uint64_t>(bytes, index);
+				T retval = {};
+				for (std::size_t i = 0; i < size; i++) {
+					retval.insert({
+						deserialize_impl<std::string>(bytes, index),
+						deserialize_impl<Value>(bytes, index)
+					});
+				}
+				return retval;
+			}
+			else {
+				throw std::exception("Expected object type byte.");
+			}
+		}
+		template<typename T> requires Internal::isOptional<T>
+		static T deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			using E = typename T::value_type;
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NULL_T) {
+				return std::nullopt;
+			}
+			else {
+				return deserialize_impl<E>(bytes, index);
+			}
+		}
+		template<> static bool deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::BOOLEAN_FALSE) {
+				return false;
+			}
+			else if (type == Internal::BinType::BOOLEAN_TRUE) {
+				return true;
+			}
+			else {
+				throw std::exception("Expected boolean type.");
+			}
+		}
+		template<> static float deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_FLOAT_32) {
+				return Internal::readBytesAs<float>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected float type.");
+			}
+		}
+		template<> static double deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_FLOAT_64) {
+				return Internal::readBytesAs<double>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected double type.");
+			}
+		}
+		template<> static int8_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_INTEGER_8) {
+				return Internal::readBytesAs<int8_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected i8 type.");
+			}
+		}
+		template<> static int16_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_INTEGER_16) {
+				return Internal::readBytesAs<int16_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected i16 type.");
+			}
+		}
+		template<> static int32_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_INTEGER_32) {
+				return Internal::readBytesAs<int32_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected i32 type.");
+			}
+		}
+		template<> static int64_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_INTEGER_64) {
+				return Internal::readBytesAs<int64_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected i64 type.");
+			}
+		}
+		template<> static uint8_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_UNSIGNED_8) {
+				return Internal::readBytesAs<uint8_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected u8 type.");
+			}
+		}
+		template<> static uint16_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_UNSIGNED_16) {
+				return Internal::readBytesAs<uint16_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected u16 type.");
+			}
+		}
+		template<> static uint32_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_UNSIGNED_32) {
+				return Internal::readBytesAs<uint32_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected u32 type.");
+			}
+		}
+		template<> static uint64_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+			if (type == Internal::BinType::NUMBER_UNSIGNED_64) {
+				return Internal::readBytesAs<uint64_t>(bytes, index);
+			}
+			else {
+				throw std::exception("Expected u64 type.");
+			}
+		}
 		template<> static nlohmann::json deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
 			return Json::deserialize_impl_json(bytes, index, 0);
-		}
+		};
 		template<typename T> concept Deserializable = requires (const T& object, const std::vector<uint8_t>& bytes, std::size_t& index) {
 			{ Deserialization::deserialize_impl<T>(bytes, index) } -> std::same_as<T>;
 		};
 	};
 	template<typename T> requires Deserialization::Deserializable<T> T deserialize(const std::vector<uint8_t>& bytes) {
 		std::size_t index = 0;
+		// In the future we will read the header here
 		return Deserialization::deserialize_impl<T>(bytes, index);
 	}
 
