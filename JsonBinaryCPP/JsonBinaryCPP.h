@@ -2,15 +2,21 @@
 #define __JSONBINARY_CPP_H_
 
 #include <nlohmann/json.hpp>
-#include <vector>
 #include <string>
+#include <vector>
+#include <array>
+#include <unordered_map>
+#include <map>
+#include <unordered_set>
+#include <set>
+#include <optional>
 #include <exception>
 
 namespace JsonBinary {
 	namespace Internal {
-		template<class T> concept isTriviallyCopyable = std::is_trivially_copyable<T>::value;
-		template<class T, std::size_t N> concept isTypeSize = std::enable_if<sizeof(T) == N>::value;
-		enum class BinType : unsigned char {
+		template<typename T> concept isTriviallyCopyable = std::is_trivially_copyable<T>::value;
+		template <auto A, typename...> auto DelayEvaluation = A;
+		enum class BinType : uint8_t {
 			OBJECT_8 = 1,
 			OBJECT_64,
 			ARRAY_8,
@@ -20,7 +26,8 @@ namespace JsonBinary {
 			NULL_T,
 			BOOLEAN_TRUE,
 			BOOLEAN_FALSE,
-			NUMBER_FLOAT,
+			NUMBER_FLOAT_32,
+			NUMBER_FLOAT_64,
 			NUMBER_INTEGER_8,
 			NUMBER_INTEGER_16,
 			NUMBER_INTEGER_32,
@@ -31,174 +38,22 @@ namespace JsonBinary {
 			NUMBER_UNSIGNED_64,
 		};
 		class ByteArray {
-			bool isInvalid = false;
 			std::vector<uint8_t> bytes;
 		public:
-			template <typename Object> requires isTriviallyCopyable<Object>
-			void push_back(Object object) {
-				if (isInvalid) {
-					throw std::exception("ByteArray currwently is invalid.");
-				}
+			template <typename Object> requires isTriviallyCopyable<Object> void push_back(Object object) {
 				constexpr std::size_t sizeType = sizeof(Object);
 				const uint8_t* ptr = (const uint8_t*)&object;
 				for (std::size_t i = 0; i < sizeType; i++) {
 					bytes.push_back(ptr[i]);
 				}
 			}
-			std::vector<unsigned char> get() noexcept {
-				isInvalid = true;
+			std::vector<uint8_t> get() noexcept {
 				return bytes;
 			}
 		};
-		void serialize_Impl(const nlohmann::json& json, ByteArray& bytes, int depth = 0) {
-			if (depth > 32) {
-				throw std::exception("Recursive depth too great. Either the json has a circular reference, or is highly nested.");
-			}
-			const nlohmann::json::value_t value_t = json.type();
-			switch (value_t) {
-			case nlohmann::json::value_t::object:
-				/*
-					For objects we must put the type (1 byte), the length (4 bytes) then we serialize the string-value pairs
-				*/
-			{
-				const uint64_t length = json.size();
-				if (std::in_range<uint8_t>(length)) {
-					bytes.push_back(BinType::OBJECT_8);
-					bytes.push_back((uint8_t)json.size());
-				}
-				else {
-					bytes.push_back(BinType::OBJECT_64);
-					bytes.push_back((uint64_t)json.size());
-				}
-				for (const auto& kv : json.items()) {
-					serialize_Impl(kv.key(), bytes, depth + 1);
-					serialize_Impl(kv.value(), bytes, depth + 1);
-				}
-			}
-			break;
-			case nlohmann::json::value_t::array:
-				/*
-					For arrays we must put the type, the length, then the elements
-				*/
-			{
-				const uint64_t length = json.size();
-				if (std::in_range<uint8_t>(length)) {
-					bytes.push_back(BinType::ARRAY_8);
-					bytes.push_back((uint8_t)json.size());
-				}
-				else {
-					bytes.push_back(BinType::ARRAY_64);
-					bytes.push_back((uint64_t)json.size());
-				}
-				for (const auto& el : json) {
-					serialize_Impl(el, bytes, depth + 1);
-				}
-			}
-			break;
-			case nlohmann::json::value_t::string:
-				/*
-					For strings we put the type, the length, then all the characters
-				*/
-			{
-				const std::string& str = json.get<std::string>();
-				const uint64_t length = str.size();
-				if (std::in_range<uint8_t>(length)) {
-					bytes.push_back(BinType::STRING_8);
-					bytes.push_back((uint8_t)str.size());
-				}
-				else {
-					// 64-bit length
-					bytes.push_back(BinType::STRING_64);
-					bytes.push_back((uint8_t)str.size());
-				}
-				for (const unsigned char c : str) {
-					bytes.push_back(c);
-				}
-			}
-			break;
-			case nlohmann::json::value_t::null:
-				/*
-					For null we put the type and thats it
-				*/
-				bytes.push_back(BinType::NULL_T);
-				break;
-			case nlohmann::json::value_t::boolean:
-				/*
-					For boolean we choose between the BOOLEAN_TRUE and BOOLEAN_FALSE types
-				*/
-				if (json.get<bool>()) {
-					bytes.push_back(BinType::BOOLEAN_TRUE);
-				}
-				else {
-					bytes.push_back(BinType::BOOLEAN_FALSE);
-				}
-				break;
-			case nlohmann::json::value_t::number_float:
-				/*
-					For floats we put the type, then the 8 bytes of a double
-				*/
-				bytes.push_back(BinType::NUMBER_FLOAT);
-				bytes.push_back(json.get<double>());
-				break;
-			case nlohmann::json::value_t::number_integer:
-				/*
-					For integers we put the type, then the 8 bytes of a int64_t
-				*/
-			{
-				const int64_t value = json.get<int64_t>();
-				// Check if we can restrict the range
-				if (std::in_range<int8_t>(value)) {
-					bytes.push_back(BinType::NUMBER_INTEGER_8);
-					bytes.push_back((int8_t)value);
-				}
-				else if (std::in_range<int16_t>(value)) {
-					bytes.push_back(BinType::NUMBER_INTEGER_16);
-					bytes.push_back((int16_t)value);
-				}
-				else if (std::in_range<int32_t>(value)) {
-					bytes.push_back(BinType::NUMBER_INTEGER_32);
-					bytes.push_back((int32_t)value);
-				}
-				else {
-					// It is a 64-bit integer
-					bytes.push_back(BinType::NUMBER_INTEGER_64);
-					bytes.push_back((int64_t)value);
-				}
-			}
-			break;
-			case nlohmann::json::value_t::number_unsigned:
-				/*
-					For integers we put the type, then the 8 bytes of a uint64_t
-				*/
-			{
-				const uint64_t value = json.get<uint64_t>();
-				// Check if we can restrict the range
-				if (std::in_range<uint8_t>(value)) {
-					bytes.push_back(BinType::NUMBER_UNSIGNED_8);
-					bytes.push_back((uint8_t)value);
-				}
-				else if (std::in_range<uint16_t>(value)) {
-					bytes.push_back(BinType::NUMBER_UNSIGNED_16);
-					bytes.push_back((uint16_t)value);
-				}
-				else if (std::in_range<uint32_t>(value)) {
-					bytes.push_back(BinType::NUMBER_UNSIGNED_32);
-					bytes.push_back((uint32_t)value);
-				}
-				else {
-					// It is a 64-bit integer
-					bytes.push_back(BinType::NUMBER_UNSIGNED_64);
-					bytes.push_back((uint64_t)value);
-				}
-			}
-			break;
-			default:
-				throw std::exception("Unsupported type.");
-			}
-		}
 
 		template<typename T> requires isTriviallyCopyable<T>
-		T readBytesAs(const std::vector<unsigned char>& bytes, std::size_t& index) {
+		T readBytesAs(const std::vector<uint8_t>& bytes, std::size_t& index) {
 			constexpr std::size_t N = sizeof(T);
 			const std::size_t availableSpace = bytes.size() - index;
 			if (availableSpace < N) {
@@ -208,122 +63,363 @@ namespace JsonBinary {
 			index += N;
 			return *ptr;
 		}
-		nlohmann::json deserialize_Impl(const std::vector<unsigned char>& bytes, std::size_t& index, int depth) {
-			if (depth > 32) {
-				throw std::exception("Recursive depth too deep.");
-			}
-			BinType type = readBytesAs<BinType>(bytes, index);
-			switch (type) {
-			case BinType::OBJECT_8:
-			{
-				nlohmann::json object = nlohmann::json::object();
-				const uint8_t length = readBytesAs<uint8_t>(bytes, index);
-				for (std::size_t i = 0; i < length; i++) {
-					// Read string
-					nlohmann::json strJSON = deserialize_Impl(bytes, index, depth + 1);
-					if (!strJSON.is_string()) {
-						throw std::exception("Objects must have strings as keys.");
+		
+	};
+
+	namespace Deserialization {
+		namespace Json {
+			nlohmann::json deserialize_impl_json(const std::vector<uint8_t>& bytes, std::size_t& index, int depth) {
+				if (depth > 32) {
+					throw std::exception("Recursive depth too deep.");
+				}
+				Internal::BinType type = Internal::readBytesAs<Internal::BinType>(bytes, index);
+				switch (type) {
+					case Internal::BinType::OBJECT_8:
+					{
+						nlohmann::json object = nlohmann::json::object();
+						const uint8_t length = Internal::readBytesAs<uint8_t>(bytes, index);
+						for (std::size_t i = 0; i < length; i++) {
+							// Read string
+							nlohmann::json strJSON = deserialize_impl_json(bytes, index, depth + 1);
+							if (!strJSON.is_string()) {
+								throw std::exception("Objects must have strings as keys.");
+							}
+							// Read the value
+							nlohmann::json valueJSON = deserialize_impl_json(bytes, index, depth + 1);
+							object.push_back({ strJSON, valueJSON });
+						}
+						return object;
 					}
-					// Read the value
-					nlohmann::json valueJSON = deserialize_Impl(bytes, index, depth + 1);
-					object.push_back({ strJSON, valueJSON });
-				}
-				return object;
-			}
-			case BinType::OBJECT_64:
-			{
-				nlohmann::json object = nlohmann::json::object();
-				const uint64_t length = readBytesAs<uint64_t>(bytes, index);
-				for (std::size_t i = 0; i < length; i++) {
-					// Read string
-					nlohmann::json strJSON = deserialize_Impl(bytes, index, depth + 1);
-					if (!strJSON.is_string()) {
-						throw std::exception("Objects must have strings as keys.");
+					case Internal::BinType::OBJECT_64:
+					{
+						nlohmann::json object = nlohmann::json::object();
+						const uint64_t length = Internal::readBytesAs<uint64_t>(bytes, index);
+						for (std::size_t i = 0; i < length; i++) {
+							// Read string
+							nlohmann::json strJSON = deserialize_impl_json(bytes, index, depth + 1);
+							if (!strJSON.is_string()) {
+								throw std::exception("Objects must have strings as keys.");
+							}
+							// Read the value
+							nlohmann::json valueJSON = deserialize_impl_json(bytes, index, depth + 1);
+							object.push_back({ strJSON, valueJSON });
+						}
+						return object;
 					}
-					// Read the value
-					nlohmann::json valueJSON = deserialize_Impl(bytes, index, depth + 1);
-					object.push_back({ strJSON, valueJSON });
+					case Internal::BinType::ARRAY_8:
+					{
+						nlohmann::json array = nlohmann::json::array();
+						const uint8_t length = Internal::readBytesAs<uint8_t>(bytes, index);
+						for (std::size_t i = 0; i < length; i++) {
+							// Read each element
+							nlohmann::json element = deserialize_impl_json(bytes, index, depth + 1);
+							array.push_back(element);
+						}
+						return array;
+					}
+					case Internal::BinType::ARRAY_64:
+					{
+						nlohmann::json array = nlohmann::json::array();
+						const uint64_t length = Internal::readBytesAs<uint64_t>(bytes, index);
+						for (std::size_t i = 0; i < length; i++) {
+							// Read each element
+							nlohmann::json element = deserialize_impl_json(bytes, index, depth + 1);
+							array.push_back(element);
+						}
+						return array;
+					}
+					case Internal::BinType::STRING_8:
+					{
+						const uint8_t length = Internal::readBytesAs<uint8_t>(bytes, index);
+						if (bytes.size() - index < length) {
+							throw std::exception("String length not matched to data length.");
+						}
+						std::string str = std::string((const char*)&bytes[index], length);
+						index += length;
+						return str;
+					}
+					case Internal::BinType::STRING_64:
+					{
+						const uint64_t length = Internal::readBytesAs<uint64_t>(bytes, index);
+						if (bytes.size() - index < length) {
+							throw std::exception("String length not matched to data length.");
+						}
+						std::string str = std::string((const char*)&bytes[index], length);
+						index += length;
+						return str;
+					}
+					case Internal::BinType::NULL_T:
+						return nullptr;
+					case Internal::BinType::BOOLEAN_TRUE:
+						return true;
+					case Internal::BinType::BOOLEAN_FALSE:
+						return false;
+					case Internal::BinType::NUMBER_FLOAT_32:
+						return static_cast<double>(Internal::readBytesAs<float>(bytes, index));
+					case Internal::BinType::NUMBER_FLOAT_64:
+						return Internal::readBytesAs<double>(bytes, index);
+					case Internal::BinType::NUMBER_INTEGER_8:
+						return (int64_t)Internal::readBytesAs<int8_t>(bytes, index);
+					case Internal::BinType::NUMBER_INTEGER_16:
+						return (int64_t)Internal::readBytesAs<int16_t>(bytes, index);
+					case Internal::BinType::NUMBER_INTEGER_32:
+						return (int64_t)Internal::readBytesAs<int32_t>(bytes, index);
+					case Internal::BinType::NUMBER_INTEGER_64:
+						return Internal::readBytesAs<int64_t>(bytes, index);
+					case Internal::BinType::NUMBER_UNSIGNED_8:
+						return (uint64_t)Internal::readBytesAs<uint8_t>(bytes, index);
+					case Internal::BinType::NUMBER_UNSIGNED_16:
+						return (uint64_t)Internal::readBytesAs<uint16_t>(bytes, index);
+					case Internal::BinType::NUMBER_UNSIGNED_32:
+						return (uint64_t)Internal::readBytesAs<uint32_t>(bytes, index);
+					case Internal::BinType::NUMBER_UNSIGNED_64:
+						return Internal::readBytesAs<uint64_t>(bytes, index);
+					default:
+						throw std::exception("Malformed json.");
 				}
-				return object;
 			}
-			case BinType::ARRAY_8:
-			{
-				nlohmann::json array = nlohmann::json::array();
-				const uint8_t length = readBytesAs<uint8_t>(bytes, index);
-				for (std::size_t i = 0; i < length; i++) {
-					// Read each element
-					nlohmann::json element = deserialize_Impl(bytes, index, depth + 1);
-					array.push_back(element);
+		};
+		template<typename T> static T deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) = delete;
+		template<> static nlohmann::json deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+			return Json::deserialize_impl_json(bytes, index, 0);
+		}
+		template<typename T> concept Deserializable = requires (const T& object, const std::vector<uint8_t>& bytes, std::size_t& index) {
+			{ Deserialization::deserialize_impl<T>(bytes, index) } -> std::same_as<T>;
+		};
+	};
+	template<typename T> requires Deserialization::Deserializable<T> T deserialize(const std::vector<uint8_t>& bytes) {
+		std::size_t index = 0;
+		return Deserialization::deserialize_impl<T>(bytes, index);
+	}
+
+	namespace Serialization {
+		template<typename T> static void serialize_impl(const T& object, Internal::ByteArray& bytes) = delete;
+		template<typename T> requires Internal::isTriviallyCopyable<T> static void serialize_impl(const T& object, Internal::ByteArray& bytes) {
+			if constexpr (std::is_same<T, uint8_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_UNSIGNED_8);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, uint16_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_UNSIGNED_16);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, uint32_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_UNSIGNED_32);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, uint64_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_UNSIGNED_64);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, int8_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_INTEGER_8);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, int16_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_INTEGER_16);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, int32_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_INTEGER_32);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, int64_t>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_INTEGER_64);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, double>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_FLOAT_64);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, float>::value) {
+				bytes.push_back(Internal::BinType::NUMBER_FLOAT_32);
+				bytes.push_back(object);
+			}
+			else if constexpr (std::is_same<T, bool>::value) {
+				if (object) {
+					bytes.push_back(Internal::BinType::BOOLEAN_TRUE);
 				}
-				return array;
-			}
-			case BinType::ARRAY_64:
-			{
-				nlohmann::json array = nlohmann::json::array();
-				const uint64_t length = readBytesAs<uint64_t>(bytes, index);
-				for (std::size_t i = 0; i < length; i++) {
-					// Read each element
-					nlohmann::json element = deserialize_Impl(bytes, index, depth + 1);
-					array.push_back(element);
+				else {
+					bytes.push_back(Internal::BinType::BOOLEAN_FALSE);
 				}
-				return array;
 			}
-			case BinType::STRING_8:
-			{
-				const uint8_t length = readBytesAs<uint8_t>(bytes, index);
-				if (bytes.size() - index < length) {
-					throw std::exception("String length not matched to data length.");
-				}
-				std::string str = std::string((const char*)&bytes[index], length);
-				index += length;
-				return str;
-			}
-			case BinType::STRING_64:
-			{
-				const uint64_t length = readBytesAs<uint64_t>(bytes, index);
-				if (bytes.size() - index < length) {
-					throw std::exception("String length not matched to data length.");
-				}
-				std::string str = std::string((const char*)&bytes[index], length);
-				index += length;
-				return str;
-			}
-			case BinType::NULL_T:
-				return nullptr;
-			case BinType::BOOLEAN_TRUE:
-				return true;
-			case BinType::BOOLEAN_FALSE:
-				return false;
-			case BinType::NUMBER_FLOAT:
-				return readBytesAs<double>(bytes, index);
-			case BinType::NUMBER_INTEGER_8:
-				return (int64_t)readBytesAs<int8_t>(bytes, index);
-			case BinType::NUMBER_INTEGER_16:
-				return (int64_t)readBytesAs<int16_t>(bytes, index);
-			case BinType::NUMBER_INTEGER_32:
-				return (int64_t)readBytesAs<int32_t>(bytes, index);
-			case BinType::NUMBER_INTEGER_64:
-				return readBytesAs<int64_t>(bytes, index);
-			case BinType::NUMBER_UNSIGNED_8:
-				return (uint64_t)readBytesAs<uint8_t>(bytes, index);
-			case BinType::NUMBER_UNSIGNED_16:
-				return (uint64_t)readBytesAs<uint16_t>(bytes, index);
-			case BinType::NUMBER_UNSIGNED_32:
-				return (uint64_t)readBytesAs<uint32_t>(bytes, index);
-			case BinType::NUMBER_UNSIGNED_64:
-				return readBytesAs<uint64_t>(bytes, index);
-			default:
-				throw std::exception("Malformed json.");
+			else {
+				static_assert(Internal::DelayEvaluation<false, T>, "Invalid template parameter.");
 			}
 		}
+		template<typename T> requires Serializable<T> static void serialize_impl(const std::optional<T>& object, Internal::ByteArray& bytes) {
+			if (object.has_value()) {
+				serialize_impl(object.value(), bytes);
+			}
+			else {
+				bytes.push_back(Internal::BinType::NULL_T);
+			}
+		}
+		template<> static void serialize_impl(const std::string& object, Internal::ByteArray& bytes) {
+			const auto size = object.size();
+			if (std::in_range<uint8_t>(size)) {
+				bytes.push_back(Internal::BinType::STRING_8);
+				bytes.push_back((uint8_t)size);
+			}
+			else {
+				bytes.push_back(Internal::BinType::STRING_64);
+				bytes.push_back((uint64_t)size);
+			}
+			for (const auto c : object) {
+				bytes.push_back(c);
+			}
+		}
+		template<typename T> requires Serializable<T> static void serialize_impl(const std::vector<T>& object, Internal::ByteArray& bytes) {
+			const auto size = object.size();
+			if (std::in_range<uint8_t>(size)) {
+				bytes.push_back(Internal::BinType::ARRAY_8);
+				bytes.push_back((uint8_t)size);
+			}
+			else {
+				bytes.push_back(Internal::BinType::ARRAY_64);
+				bytes.push_back((uint64_t)size);
+			}
+			for (const T& c : object) {
+				serialize_impl(c, bytes);
+			}
+		}
+		template<typename T, std::size_t N> requires Serializable<T> static void serialize_impl(const std::array<T, N>& object, Internal::ByteArray& bytes) {
+			const auto size = object.size();
+			if (std::in_range<uint8_t>(size)) {
+				bytes.push_back(Internal::BinType::ARRAY_8);
+				bytes.push_back((uint8_t)size);
+			}
+			else {
+				bytes.push_back(Internal::BinType::ARRAY_64);
+				bytes.push_back((uint64_t)size);
+			}
+			for (const T& c : object) {
+				serialize_impl(c, bytes);
+			}
+		}
+		template<typename T> requires Serializable<T> static void serialize_impl(const std::set<T>& object, Internal::ByteArray& bytes) {
+			const auto size = object.size();
+			if (std::in_range<uint8_t>(size)) {
+				bytes.push_back(Internal::BinType::ARRAY_8);
+				bytes.push_back((uint8_t)size);
+			}
+			else {
+				bytes.push_back(Internal::BinType::ARRAY_64);
+				bytes.push_back((uint64_t)size);
+			}
+			for (const T& c : object) {
+				serialize_impl(c, bytes);
+			}
+		}
+		template<typename T> requires Serializable<T> static void serialize_impl(const std::unordered_set<T>& object, Internal::ByteArray& bytes) {
+			const auto size = object.size();
+			if (std::in_range<uint8_t>(size)) {
+				bytes.push_back(Internal::BinType::ARRAY_8);
+				bytes.push_back((uint8_t)size);
+			}
+			else {
+				bytes.push_back(Internal::BinType::ARRAY_64);
+				bytes.push_back((uint64_t)size);
+			}
+			for (const T& c : object) {
+				serialize_impl(c, bytes);
+			}
+		}
+		template<typename V> requires Serializable<V> static void serialize_impl(const std::map<std::string, V>& object, Internal::ByteArray& bytes) {
+			const auto size = object.size();
+			if (std::in_range<uint8_t>(size)) {
+				bytes.push_back(Internal::BinType::OBJECT_8);
+				bytes.push_back((uint8_t)size);
+			}
+			else {
+				bytes.push_back(Internal::BinType::OBJECT_64);
+				bytes.push_back((uint64_t)size);
+			}
+			for (const std::pair<std::string, V> &pair : object) {
+				serialize_impl(pair.first, bytes);
+				serialize_impl(pair.second, bytes);
+			}
+		}
+		template<typename V> requires Serializable<V> static void serialize_impl(const std::unordered_map<std::string, V>& object, Internal::ByteArray& bytes) {
+			const auto size = object.size();
+			if (std::in_range<uint8_t>(size)) {
+				bytes.push_back(Internal::BinType::OBJECT_8);
+				bytes.push_back((uint8_t)size);
+			}
+			else {
+				bytes.push_back(Internal::BinType::OBJECT_64);
+				bytes.push_back((uint64_t)size);
+			}
+			for (const std::pair<std::string, V>& pair : object) {
+				serialize_impl(pair.first, bytes);
+				serialize_impl(pair.second, bytes);
+			}
+		}
+		template<> static void serialize_impl(const nlohmann::json& object, Internal::ByteArray& bytes) {
+			const auto type = object.type();
+			const auto size = object.size();
+			if (type == nlohmann::json::value_t::object) {
+				if (std::in_range<uint8_t>(size)) {
+					bytes.push_back(Internal::BinType::OBJECT_8);
+					bytes.push_back((uint8_t)size);
+				}
+				else {
+					bytes.push_back(Internal::BinType::OBJECT_64);
+					bytes.push_back((uint64_t)size);
+				}
+				for (const auto& kv : object.items()) {
+					serialize_impl(kv.key(), bytes);
+					serialize_impl(kv.value(), bytes);
+				}
+			}
+			else if (type == nlohmann::json::value_t::array) {
+				if (std::in_range<uint8_t>(size)) {
+					bytes.push_back(Internal::BinType::ARRAY_8);
+					bytes.push_back((uint8_t)size);
+				}
+				else {
+					bytes.push_back(Internal::BinType::ARRAY_64);
+					bytes.push_back((uint64_t)size);
+				}
+				for (const auto& el : object) {
+					serialize_impl(el, bytes);
+				}
+			}
+			else if (type == nlohmann::json::value_t::string) {
+				const auto str = object.get<std::string>();
+				serialize_impl(str, bytes);
+			}
+			else if (type == nlohmann::json::value_t::null) {
+				bytes.push_back(Internal::BinType::NULL_T);
+			}
+			else if (type == nlohmann::json::value_t::boolean) {
+				const auto value = object.get<bool>();
+				serialize_impl(value, bytes);
+			}
+			else if (type == nlohmann::json::value_t::number_float) {
+				const auto value = object.get<double>();
+				serialize_impl(value, bytes);
+			}
+			else if (type == nlohmann::json::value_t::number_integer) {
+				const int64_t value = object.get<int64_t>();
+				serialize_impl(value, bytes);
+			}
+			else if (type == nlohmann::json::value_t::number_unsigned) {
+				const uint64_t value = object.get<uint64_t>();
+				serialize_impl(value, bytes);
+			}
+			else {
+				throw std::exception("Unsupported json type.");
+			}
+		}
+		template<typename T> concept Serializable = requires (const T& object, Internal::ByteArray& bytes) {
+			{ Serialization::serialize_impl(object, bytes) } -> std::same_as<void>;
+		};
 	};
-	nlohmann::json deserialize(const std::vector<unsigned char>& bytes) {
-		std::size_t index = 0;
-		return Internal::deserialize_Impl(bytes, index, 0);
-	}
-	std::vector<unsigned char> serialize(const nlohmann::json& json) {
+	template<typename T> requires Serialization::Serializable<T> std::vector<uint8_t> serialize(const T& object) {
 		Internal::ByteArray bytes = {};
-		Internal::serialize_Impl(json, bytes);
+		// In the future we will write the header here
+		Serialization::serialize_impl(object, bytes);
 		return bytes.get();
 	}
 };

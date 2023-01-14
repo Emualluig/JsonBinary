@@ -8,7 +8,8 @@ enum BinType {
 	NULL_T,
 	BOOLEAN_TRUE,
 	BOOLEAN_FALSE,
-	NUMBER_FLOAT,
+    NUMBER_FLOAT_32,
+	NUMBER_FLOAT_64,
 	NUMBER_INTEGER_8,
 	NUMBER_INTEGER_16,
 	NUMBER_INTEGER_32,
@@ -235,7 +236,7 @@ const serialize_Impl = (json: any, bytes: ByteArray, depth: number) => {
                         }
                     }
                 } else {
-                    bytes.push_back_u8(BinType.NUMBER_FLOAT);
+                    bytes.push_back_u8(BinType.NUMBER_FLOAT_64);
                     bytes.push_back_float(typed);
                 }
             }
@@ -317,7 +318,14 @@ const readBytesAsString = (bytes: Uint8Array, index: { value: number }, length: 
     index.value += length;
     return new TextDecoder().decode(view);
 }
-const readBytesAsFloat = (bytes: Uint8Array, index: { value: number }): number => {
+const readBytesAsFloat32 = (bytes: Uint8Array, index: { value: number }): number => {
+    checkForLength(bytes, index.value, 4);
+    const view = new DataView(bytes.buffer, index.value, 4);
+    const value = view.getFloat32(0, true);
+    index.value += 4;
+    return Number(value);
+}
+const readBytesAsFloat64 = (bytes: Uint8Array, index: { value: number }): number => {
     checkForLength(bytes, index.value, 8);
     const view = new DataView(bytes.buffer, index.value, 8);
     const value = view.getFloat64(0, true);
@@ -400,8 +408,10 @@ const deserialize_Impl = (bytes: Uint8Array, index: { value: number }, depth: nu
             return true;
         case BinType.BOOLEAN_FALSE:
             return false;
-        case BinType.NUMBER_FLOAT:
-            return readBytesAsFloat(bytes, index);
+        case BinType.NUMBER_FLOAT_32:
+            return readBytesAsFloat32(bytes, index);
+        case BinType.NUMBER_FLOAT_64:
+            return readBytesAsFloat64(bytes, index);
         case BinType.NUMBER_INTEGER_8:
             return readBytesAsI8(bytes, index);
         case BinType.NUMBER_INTEGER_16:
