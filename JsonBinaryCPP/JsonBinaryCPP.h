@@ -31,6 +31,8 @@ namespace JsonBinary {
 		template<typename T> concept isOptional =
 			std::same_as<T, std::optional<typename T::value_type>>;
 
+		template<typename T> concept isInteger = std::is_integral<T>::value;
+
 		enum class BinType : uint8_t {
 			OBJECT_8 = 1,
 			OBJECT_64,
@@ -335,76 +337,27 @@ namespace JsonBinary {
 				throw std::exception("Expected double type.");
 			}
 		}
-		template<> static int8_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
+		template<typename T> requires Internal::isInteger<T> static T deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
 			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_INTEGER_8) {
-				return Internal::readBytesAs<int8_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected i8 type.");
-			}
-		}
-		template<> static int16_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
-			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_INTEGER_16) {
-				return Internal::readBytesAs<int16_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected i16 type.");
-			}
-		}
-		template<> static int32_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
-			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_INTEGER_32) {
-				return Internal::readBytesAs<int32_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected i32 type.");
-			}
-		}
-		template<> static int64_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
-			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_INTEGER_64) {
-				return Internal::readBytesAs<int64_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected i64 type.");
-			}
-		}
-		template<> static uint8_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
-			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_UNSIGNED_8) {
-				return Internal::readBytesAs<uint8_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected u8 type.");
-			}
-		}
-		template<> static uint16_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
-			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_UNSIGNED_16) {
-				return Internal::readBytesAs<uint16_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected u16 type.");
-			}
-		}
-		template<> static uint32_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
-			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_UNSIGNED_32) {
-				return Internal::readBytesAs<uint32_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected u32 type.");
-			}
-		}
-		template<> static uint64_t deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
-			const auto type = Internal::readBytesAs<Internal::BinType>(bytes, index);
-			if (type == Internal::BinType::NUMBER_UNSIGNED_64) {
-				return Internal::readBytesAs<uint64_t>(bytes, index);
-			}
-			else {
-				throw std::exception("Expected u64 type.");
+			switch (type) {
+				case Internal::BinType::NUMBER_INTEGER_8:
+					return Internal::readBytesAs<int8_t>(bytes, index);
+				case Internal::BinType::NUMBER_INTEGER_16:
+					return Internal::readBytesAs<int16_t>(bytes, index);
+				case Internal::BinType::NUMBER_INTEGER_32:
+					return Internal::readBytesAs<int32_t>(bytes, index);
+				case Internal::BinType::NUMBER_INTEGER_64:
+					return Internal::readBytesAs<int64_t>(bytes, index);
+				case Internal::BinType::NUMBER_UNSIGNED_8:
+					return Internal::readBytesAs<uint8_t>(bytes, index);
+				case Internal::BinType::NUMBER_UNSIGNED_16:
+					return Internal::readBytesAs<uint16_t>(bytes, index);
+				case Internal::BinType::NUMBER_UNSIGNED_32:
+					return Internal::readBytesAs<uint32_t>(bytes, index);
+				case Internal::BinType::NUMBER_UNSIGNED_64:
+					return Internal::readBytesAs<uint64_t>(bytes, index);
+				default:
+					throw std::exception("Unsupported integeral type.");
 			}
 		}
 		template<> static nlohmann::json deserialize_impl(const std::vector<uint8_t>& bytes, std::size_t& index) {
